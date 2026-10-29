@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TaskFlow API : tableau de bord</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f5f7; color: #1f2430; font-family: system-ui, sans-serif; }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+    header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .75rem; margin-bottom: 1.25rem; }
+    h1 { margin: 0; font-size: 1.5rem; }
+    h2 { margin: 0 0 .75rem; font-size: 1.05rem; }
+    .links a { margin-left: .75rem; color: #2f5bea; font-size: .9rem; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: .75rem; margin-bottom: 1.25rem; }
+    .stat { background: #fff; border: 1px solid #e2e5ea; border-radius: 8px; padding: .8rem 1rem; display: flex; flex-direction: column; }
+    .stat b { font-size: 1.7rem; }
+    .stat span { font-size: .85rem; color: #5b6272; }
+    .stat.late b { color: #c62828; }
+    .panel { background: #fff; border: 1px solid #e2e5ea; border-radius: 8px; padding: 1.1rem; margin-bottom: 1.25rem; }
+    .filters, .form { display: flex; gap: .5rem; flex-wrap: wrap; }
+    input, select, button { font: inherit; padding: .5rem .65rem; border: 1px solid #c9ced8; border-radius: 6px; background: #fff; }
+    input[type=text] { flex: 1; min-width: 160px; }
+    button { cursor: pointer; }
+    .btn { background: #2f5bea; border-color: #2f5bea; color: #fff; }
+    .del { color: #c62828; border-color: #c62828; padding: .3rem .6rem; font-size: .85rem; }
+    .table-wrap { overflow-x: auto; margin-top: .75rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: .6rem .5rem; border-bottom: 1px solid #eceef2; }
+    th { font-size: .85rem; color: #5b6272; }
+    td small { display: block; color: #5b6272; }
+    .badge { padding: .15rem .55rem; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+    .HIGH { background: #fde7e7; color: #a12020; }
+    .MEDIUM { background: #fff3d6; color: #8a5a00; }
+    .LOW { background: #e6f4ea; color: #1e6b34; }
+    .late-date { color: #c62828; font-weight: 600; }
+    .msg { padding: .6rem .9rem; border-radius: 6px; margin-bottom: .75rem; display: none; }
+    .msg.error { display: block; background: #fde7e7; color: #a12020; }
+    .msg.ok { display: block; background: #e6f4ea; color: #1e6b34; }
+    .empty { text-align: center; color: #5b6272; padding: 1.5rem 0; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>TaskFlow API</h1>
+    <div class="links">
+      <a href="/swagger-ui.html" target="_blank">Swagger UI</a>
+      <a href="/api/tasks/stats" target="_blank">/api/tasks/stats</a>
+      <a href="/h2-console" target="_blank">Console H2</a>
+    </div>
+  </header>
+
+  <div id="msg" class="msg" role="status"></div>
+
+  <section class="stats" id="stats" aria-label="Statistiques"></section>
+
+  <section class="panel">
+    <h2>Ajouter une tâche </h2>
+    <div class="form">
+      <input type="text" id="title" placeholder="Titre" aria-label="Titre">
+      <input type="text" id="description" placeholder="Description (facultatif)" aria-label="Description">
+      <select id="priority" aria-label="Priorité">
+        <option value="LOW">Basse</option>
+        <option value="MEDIUM" selected>Moyenne</option>
+        <option value="HIGH">Haute</option>
+      </select>
+      <input type="date" id="dueDate" aria-label="Date limite">
+      <button class="btn" id="add">Ajouter</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Tâches </h2>
+    <div class="filters">
+      <input type="text" id="search" placeholder="Rechercher dans le titre ou la description" aria-label="Rechercher">
+      <select id="fStatus" aria-label="Filtrer par statut">
+        <option value="">Tous les statuts</option>
+        <option value="TODO">À faire</option>
+        <option value="IN_PROGRESS">En cours</option>
+        <option value="DONE">Terminée</option>
+      </select>
+      <select id="fPriority" aria-label="Filtrer par priorité">
+        <option value="">Toutes les priorités</option>
+        <option value="HIGH">Haute</option>
+        <option value="MEDIUM">Moyenne</option>
+        <option value="LOW">Basse</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Tâche</th><th>Priorité</th><th>Statut</th><th>Échéance</th><th></th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+  const API = "/api/tasks";
+  const $ = (id) => document.getElementById(id);
+  const LABEL = { TODO: "À faire", IN_PROGRESS: "En cours", DONE: "Terminée",
+                  LOW: "Basse", MEDIUM: "Moyenne", HIGH: "Haute" };
+
+  function el(tag, props = {}, ...children) {
+    const node = Object.assign(document.createElement(tag), props);
+    children.forEach((c) => node.append(c));
+    return node;
+  }
+
+  async function request(url, options = {}) {
+    const res = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });
+    if (!res.ok) throw await res.json().catch(() => ({ message: "Erreur " + res.status }));
+    return res.status === 204 ? null : res.json();
+  }
+
+  function showMessage(text, type) {
+    const box = $("msg");
+    box.textContent = text;
+    box.className = "msg " + type;
+    clearTimeout(showMessage.t);
+    showMessage.t = setTimeout(() => (box.className = "msg"), 5000);
+  }
+
+  function showError(err) {
+    const details = err.details ? " " + Object.values(err.details).join(" ; ") : "";
+    showMessage((err.message || "Une erreur est survenue.") + details, "error");
+  }
+
+  function renderStats(s) {
+    const cards = [
+      ["Total", s.total], ["À faire", s.byStatus.TODO], ["En cours", s.byStatus.IN_PROGRESS],
+      ["Terminées", s.byStatus.DONE], ["En retard", s.overdue, "late"], ["Réalisation", s.completionRate + " %"],
+    ];
+    $("stats").replaceChildren(...cards.map(([label, value, cls]) =>
+      el("div", { className: "stat " + (cls || "") }, el("b", { textContent: value }), el("span", { textContent: label }))));
+  }
+
+  function renderRows(tasks) {
+    if (tasks.length === 0) {
+      $("rows").replaceChildren(el("tr", {}, el("td", { colSpan: 5, className: "empty", textContent: "Aucune tâche trouvée." })));
+      return;
+    }
+    $("rows").replaceChildren(...tasks.map((t) => {
+      const select = el("select", { ariaLabel: "Statut de " + t.title });
+      ["TODO", "IN_PROGRESS", "DONE"].forEach((s) =>
+        select.append(el("option", { value: s, textContent: LABEL[s], selected: s === t.status })));
+      select.onchange = () => run(() => request(`${API}/${t.id}/status`, {
+        method: "PATCH", body: JSON.stringify({ status: select.value }) }), "Statut mis à jour.");
+
+      const del = el("button", { className: "del", textContent: "Supprimer" });
+      del.onclick = () => confirm(`Supprimer « ${t.title} » ?`) &&
+        run(() => request(`${API}/${t.id}`, { method: "DELETE" }), "Tâche supprimée.");
+
+      const due = el("td", { textContent: t.dueDate || "—", className: t.overdue ? "late-date" : "" });
+      if (t.overdue) due.append(" (en retard)");
+
+      return el("tr", {},
+        el("td", {}, el("b", { textContent: t.title }), el("small", { textContent: t.description || "" })),
+        el("td", {}, el("span", { className: "badge " + t.priority, textContent: LABEL[t.priority] })),
+        el("td", {}, select), due, el("td", {}, del));
+    }));
+  }
+
+  async function load() {
+    const params = new URLSearchParams({ size: 50, sort: "createdAt,desc" });
+    if ($("search").value.trim()) params.set("search", $("search").value.trim());
+    if ($("fStatus").value) params.set("status", $("fStatus").value);
+    if ($("fPriority").value) params.set("priority", $("fPriority").value);
+    try {
+      const [page, stats] = await Promise.all([request(`${API}?${params}`), request(`${API}/stats`)]);
+      renderStats(stats);
+      renderRows(page.content);
+    } catch (err) { showError(err); }
+  }
+
+  async function run(action, okText) {
+    try { await action(); if (okText) showMessage(okText, "ok"); }
+    catch (err) { showError(err); }
+    load();
+  }
+
+  $("add").onclick = () => run(async () => {
+    await request(API, { method: "POST", body: JSON.stringify({
+      title: $("title").value, description: $("description").value || null,
+      priority: $("priority").value, dueDate: $("dueDate").value || null }) });
+    $("title").value = ""; $("description").value = ""; $("dueDate").value = "";
+  }, "Tâche ajoutée.");
+
+  let timer;
+  $("search").oninput = () => { clearTimeout(timer); timer = setTimeout(load, 250); };
+  $("fStatus").onchange = load;
+  $("fPriority").onchange = load;
+  load();
+</script>
+</body>
+</html>
